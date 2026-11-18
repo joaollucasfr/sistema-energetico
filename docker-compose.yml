@@ -1,0 +1,21 @@
+services:
+  db:
+    image: postgres:16
+    environment: {POSTGRES_USER: energia, POSTGRES_PASSWORD: energia, POSTGRES_DB: energia}
+    volumes: [pgdata:/var/lib/postgresql/data, ./backend/schema.sql:/docker-entrypoint-initdb.d/schema.sql]
+    ports: ["5432:5432"]
+  api:
+    image: node:20-alpine
+    working_dir: /app
+    volumes: [./backend:/app]
+    command: sh -c "npm install && node src/server.js"
+    environment: {DATABASE_URL: "postgres://energia:energia@db:5432/energia", JWT_SECRET: troque-este-segredo}
+    ports: ["3001:3001"]
+    depends_on: [db]
+  web:
+    image: node:20-alpine
+    working_dir: /app
+    volumes: [./frontend:/app]
+    command: sh -c "npm install && npm run dev -- --host"
+    ports: ["5173:5173"]
+volumes: {pgdata: {}}
