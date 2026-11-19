@@ -17,18 +17,61 @@ function Periodo({ p, set, rotulo = '' }) {
   return <div className="row"><label>{rotulo} Início<input type="date" value={p[0]} onChange={e => set([e.target.value, p[1]])} /></label>
     <label>Fim<input type="date" value={p[1]} onChange={e => set([p[0], e.target.value])} /></label></div>;
 }
+const fmtCpf = v => v.replace(/\D/g, '').slice(0, 11).replace(/(\d{3})(\d)/, '$1.$2').replace(/(\d{3})(\d)/, '$1.$2').replace(/(\d{3})(\d{1,2})$/, '$1-$2');
+const TITULO = { entrar: 'Entrar', criar: 'Criar conta', esqueci: 'Esqueci minha senha', redefinir: 'Criar nova senha', '2fa': 'Verificação em duas etapas' };
 function Login({ entrou }) {
-  const [novo, setNovo] = useState(false), [f, setF] = useState({}), [erro, setErro] = useState('');
-  const enviar = async () => { try { const d = await api(novo ? '/auth/register' : '/auth/login', 'POST', f); localStorage.setItem('token', d.token); entrou(); } catch (e) { setErro(e.message); } };
-  return <main style={{ maxWidth: 420 }}><div className="card"><h2>{novo ? 'Criar conta' : 'Entrar'}</h2>
-    <div className="row" style={{ flexDirection: 'column', alignItems: 'stretch' }}>
-      {novo && <label>Nome<input onChange={e => setF({ ...f, nome: e.target.value })} /></label>}
-      <label>E-mail<input type="email" onChange={e => setF({ ...f, email: e.target.value })} /></label>
-      <label>Senha<input type="password" onChange={e => setF({ ...f, senha: e.target.value })} /></label>
-      {erro && <div className="err">{erro}</div>}
-      <button className="btn" onClick={enviar}>{novo ? 'Criar conta' : 'Entrar'}</button>
-      <button className="btn sec" onClick={() => { setNovo(!novo); setErro(''); }}>{novo ? 'Já tenho conta' : 'Criar uma conta'}</button>
-    </div></div></main>;
+  const [modo, setModo] = useState('entrar'), [f, setF] = useState({}), [erro, setErro] = useState(''), [aviso, setAviso] = useState(''), [t2fa, setT2fa] = useState(''), [rec, setRec] = useState(null);
+  const ir = (m, manter) => { setModo(m); setErro(''); setAviso(''); if (!manter) setF({}); };
+  const campo = (k, rotulo, { mask, ...props } = {}) => <label>{rotulo}<input value={f[k] || ''} onChange={e => setF({ ...f, [k]: mask ? mask(e.target.value) : e.target.value })} {...props} /></label>;
+  const logar = d => { localStorage.setItem('token', d.token); entrou(); };
+  const enviar = async e => {
+    e.preventDefault(); setErro('');
+    try {
+      if (modo === 'entrar') { const d = await api('/auth/login', 'POST', { login: f.login, senha: f.senha }); if (d.precisa_2fa) { setT2fa(d.token_2fa); ir('2fa'); } else logar(d); }
+      if (modo === 'criar') logar(await api('/auth/register', 'POST', f));
+      if (modo === '2fa') logar(await api('/auth/login/2fa', 'POST', { token_2fa: t2fa, codigo: f.codigo }));
+      if (modo === 'esqueci') { setRec(await api('/auth/recuperar', 'POST', { cpf: f.cpf })); ir('redefinir', true); }
+      if (modo === 'redefinir') {
+        if (f.senha !== f.senha2) return setErro('As senhas não conferem');
+        await api('/auth/redefinir-senha', 'POST', { cpf: f.cpf, codigo: f.codigo, senha: f.senha });
+        ir('entrar'); setAviso('Senha alterada. Entre com a nova senha.');
+      }
+    } catch (e) { setErro(e.message); }
+  };
+  return <main className="login"><form className="card" onSubmit={enviar}><div className="marca">⚡ Monitor de Energia</div><h2>{TITULO[modo]}</h2>
+    <div className="row col">
+      {modo === 'entrar' && <>{campo('login', 'E-mail ou CPF', { autoComplete: 'username' })}{campo('senha', 'Senha', { type: 'password', autoComplete: 'current-password' })}</>}
+      {modo === 'criar' && <>{campo('nome', 'Nome')}{campo('cpf', 'CPF', { mask: fmtCpf, inputMode: 'numeric', placeholder: '000.000.000-00' })}{campo('email', 'E-mail', { type: 'email' })}{campo('senha', 'Senha (6+ caracteres)', { type: 'password', autoComplete: 'new-password' })}</>}
+      {modo === 'esqueci' && <><p className="mut">Informe o CPF da sua conta para criar uma nova senha.</p>{campo('cpf', 'CPF', { mask: fmtCpf, inputMode: 'numeric', placeholder: '000.000.000-00', autoFocus: true })}</>}
+      {modo === 'redefinir' && <><p className="mut">Conta do CPF {f.cpf}.</p>
+        {rec?.precisa_2fa && campo('codigo', 'Código do app autenticador (2FA)', { inputMode: 'numeric', autoComplete: 'one-time-code', maxLength: 6, autoFocus: true })}
+        {campo('senha', 'Nova senha (6+ caracteres)', { type: 'password', autoComplete: 'new-password' })}{campo('senha2', 'Repita a nova senha', { type: 'password', autoComplete: 'new-password' })}</>}
+      {modo === '2fa' && <><p className="mut">Digite o código de 6 dígitos do seu app autenticador.</p>{campo('codigo', 'Código', { inputMode: 'numeric', autoComplete: 'one-time-code', maxLength: 6, autoFocus: true })}</>}
+      {erro && <div className="err">{erro}</div>}{aviso && <div className="ok">{aviso}</div>}
+      <button className="btn">{{ entrar: 'Entrar', criar: 'Criar conta', esqueci: 'Continuar', redefinir: 'Salvar nova senha', '2fa': 'Verificar' }[modo]}</button>
+      {modo === 'entrar' && <><button type="button" className="link" onClick={() => ir('esqueci')}>Esqueci minha senha</button><button type="button" className="btn sec" onClick={() => ir('criar')}>Criar uma conta</button></>}
+      {modo !== 'entrar' && <button type="button" className="btn sec" onClick={() => ir('entrar')}>Voltar para o login</button>}
+    </div></form></main>;
+}
+function Conta() {
+  const [me, setMe] = useState(null), [qr, setQr] = useState(null), [codigo, setCodigo] = useState(''), [msg, setMsg] = useState(''), [erro, setErro] = useState('');
+  const carregar = useCallback(() => api('/me').then(setMe), []);
+  useEffect(() => { carregar(); }, [carregar]);
+  const acao = async fn => { setErro(''); setMsg(''); try { await fn(); } catch (e) { setErro(e.message); } };
+  if (!me) return <p>Carregando…</p>;
+  return <><div className="card"><h2>Minha conta</h2><table><tbody><tr><th>Nome</th><td>{me.nome}</td></tr><tr><th>CPF</th><td>{fmtCpf(me.cpf)}</td></tr><tr><th>E-mail</th><td>{me.email}</td></tr></tbody></table></div>
+    <div className="card"><h2>Verificação em duas etapas (2FA)</h2>
+      <p>Status: {me.totp_ativo ? <span className="tag on">Ativa</span> : <span className="tag">Desativada</span>}</p>
+      {!me.totp_ativo && !qr && <><p className="mut">Além da senha, o login vai pedir um código do seu celular (Google Authenticator, Microsoft Authenticator, Authy…).</p>
+        <button className="btn" onClick={() => acao(async () => setQr(await api('/2fa/iniciar', 'POST')))}>Ativar 2FA</button></>}
+      {!me.totp_ativo && qr && <><p>1. Escaneie o QR code no app autenticador:</p><img src={qr.qr} alt="QR code para o app autenticador" width="200" height="200" />
+        <p className="mut">Não consegue escanear? Digite esta chave no app: <code>{qr.secret}</code></p>
+        <div className="row"><label>2. Código de 6 dígitos<input inputMode="numeric" maxLength={6} value={codigo} onChange={e => setCodigo(e.target.value)} /></label>
+          <button className="btn" onClick={() => acao(async () => { await api('/2fa/ativar', 'POST', { codigo }); setQr(null); setCodigo(''); setMsg('2FA ativada. No próximo login o código será pedido.'); carregar(); })}>Confirmar</button>
+          <button className="btn sec" onClick={() => { setQr(null); setCodigo(''); }}>Cancelar</button></div></>}
+      {me.totp_ativo && <div className="row"><label>Código atual do app<input inputMode="numeric" maxLength={6} value={codigo} onChange={e => setCodigo(e.target.value)} /></label>
+        <button className="btn sec" onClick={() => acao(async () => { await api('/2fa/desativar', 'POST', { codigo }); setCodigo(''); setMsg('2FA desativada.'); carregar(); })}>Desativar 2FA</button></div>}
+      {erro && <p className="err">{erro}</p>}{msg && <p className="ok">{msg}</p>}</div></>;
 }
 function Equipamentos() {
   const vazio = { nome: '', categoria_id: '', potencia_w: '', horas_uso_estimadas: '' };
@@ -86,7 +129,28 @@ function Relatorios({ per }) {
   const [b, setB] = useState([new Date(new Date(per[0]) - dias * 864e5).toISOString().slice(0, 10), new Date(new Date(per[0]) - 864e5).toISOString().slice(0, 10)]), [r, setR] = useState(null);
   useEffect(() => { api(`/relatorio?a_inicio=${per[0]}&a_fim=${per[1]}&b_inicio=${b[0]}&b_fim=${b[1]}`).then(setR); }, [per, b]);
   const dif = (a, c) => c ? ((a - c) / c * 100).toFixed(0) + '%' : '—';
-  return <><div className="card"><h3>Período A (selecionado: {per[0]} a {per[1]})</h3><Periodo p={b} set={setB} rotulo="Período B:" /></div>
+  const [gerando, setGerando] = useState(false);
+  const pdf = async () => {
+    setGerando(true);
+    try {
+      const [{ jsPDF }, { default: autoTable }, me] = await Promise.all([import('jspdf'), import('jspdf-autotable'), api('/me')]);
+      const doc = new jsPDF(), br = s => s.split('-').reverse().join('/'), verde = [31, 122, 77];
+      doc.setFillColor(...verde); doc.rect(0, 0, 210, 24, 'F'); doc.setTextColor(255); doc.setFontSize(16); doc.text('Monitor de Energia - Relatório de consumo', 14, 15);
+      doc.setTextColor(40); doc.setFontSize(10);
+      doc.text([`Usuário: ${me.nome}`, `Gerado em: ${new Date().toLocaleString('pt-BR')}`, `Tarifa: ${brl(me.tarifa_kwh)} por kWh`,
+        `Período A: ${br(per[0])} a ${br(per[1])}    Período B: ${br(b[0])} a ${br(b[1])}`], 14, 32);
+      autoTable(doc, { startY: 54, head: [['Resumo', 'Período A', 'Período B', 'Variação']], headStyles: { fillColor: verde },
+        body: [['Consumo', kwh(r.a.total_kwh), kwh(r.b.total_kwh), dif(r.a.total_kwh, r.b.total_kwh)], ['Custo estimado', brl(r.a.total_custo), brl(r.b.total_custo), dif(r.a.total_custo, r.b.total_custo)],
+          ['Maior consumidor (A)', r.maior_consumidor_a || '—', '', '']] });
+      autoTable(doc, { startY: doc.lastAutoTable.finalY + 8, headStyles: { fillColor: verde }, head: [['Equipamento', 'Categoria', 'kWh A', 'kWh B', 'Variação', 'Custo A', 'Custo B']],
+        body: r.equipamentos.map(e => [e.nome, e.categoria, kwh(e.kwh_a), kwh(e.kwh_b), dif(e.kwh_a, e.kwh_b), brl(e.custo_a), brl(e.custo_b)]) });
+      const n = doc.getNumberOfPages();
+      for (let i = 1; i <= n; i++) { doc.setPage(i); doc.setFontSize(8); doc.setTextColor(120); doc.text(`Página ${i} de ${n}`, 196, 290, { align: 'right' }); }
+      doc.save(`relatorio-energia-${per[0]}-a-${per[1]}.pdf`);
+    } finally { setGerando(false); }
+  };
+  return <><div className="card"><h3>Período A (selecionado: {per[0]} a {per[1]})</h3><Periodo p={b} set={setB} rotulo="Período B:" />
+    <p style={{ marginBottom: 0 }}><button className="btn" disabled={!r || gerando} onClick={pdf}>{gerando ? 'Gerando PDF…' : 'Exportar PDF'}</button></p></div>
     {r && <div className="card scroll"><p>Maior consumidor no período A: <b>{r.maior_consumidor_a || '—'}</b>. Total A: {kwh(r.a.total_kwh)} ({brl(r.a.total_custo)}). Total B: {kwh(r.b.total_kwh)} ({brl(r.b.total_custo)}). Variação: {dif(r.a.total_kwh, r.b.total_kwh)}.</p>
       <table><thead><tr><th>Equipamento</th><th>Categoria</th><th>kWh A</th><th>kWh B</th><th>Variação</th><th>Custo A</th></tr></thead><tbody>
         {r.equipamentos.map(e => <tr key={e.nome}><td>{e.nome}</td><td>{e.categoria}</td><td>{kwh(e.kwh_a)}</td><td>{kwh(e.kwh_b)}</td><td>{dif(e.kwh_a, e.kwh_b)}</td><td>{brl(e.custo_a)}</td></tr>)}</tbody></table></div>}</>;
@@ -99,7 +163,7 @@ function Recomendacoes({ per, setPer }) {
 export default function App() {
   const [logado, setLogado] = useState(!!localStorage.getItem('token')), [aba, setAba] = useState('Dashboard'), [per, setPer] = useState([iso(29), iso(0)]);
   if (!logado) return <Login entrou={() => setLogado(true)} />;
-  const abas = { Dashboard: <Dashboard per={per} setPer={setPer} />, Equipamentos: <Equipamentos />, 'Simulação': <Simulacao per={per} setPer={setPer} />, 'Relatórios': <Relatorios per={per} />, 'Recomendações': <Recomendacoes per={per} setPer={setPer} /> };
+  const abas = { Dashboard: <Dashboard per={per} setPer={setPer} />, Equipamentos: <Equipamentos />, 'Simulação': <Simulacao per={per} setPer={setPer} />, 'Relatórios': <Relatorios per={per} />, 'Recomendações': <Recomendacoes per={per} setPer={setPer} />, Conta: <Conta /> };
   return <><nav><b>Monitor de Energia</b>{Object.keys(abas).map(a => <button key={a} className={aba === a ? 'on' : ''} onClick={() => setAba(a)}>{a}</button>)}
     <button onClick={() => { localStorage.removeItem('token'); setLogado(false); }}>Sair</button></nav><main>{abas[aba]}</main></>;
 }
